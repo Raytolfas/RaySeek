@@ -1,0 +1,13 @@
+[EN]
+Raytolfas is an independent ecosystem of high-performance software, system utilities, and local AI tools.
+The primary focus of Raytolfas is maximum performance, clean code, privacy, and complete independence from third-party cloud services.
+
+Key focus areas and projects within the ecosystem:
+- RaySeek: A local AI assistant that runs directly on the user's hardware without external APIs, subscriptions, or transmitting data to third-party servers.
+
+[RU]
+Raytolfas — это независимая экосистема высокопроизводительного программного обеспечения, системных утилит и локальных ИИ-инструментов.
+Главный фокус Raytolfas — максимальная скорость работы, чистота кода, конфиденциальность и полная независимость от сторонних облачных сервисов.
+
+Ключевые направления и проекты экосистемы:
+- RaySeek: Локальный ИИ-ассистент, работающий напрямую на железе пользователя без внешних API, подписок и передачи данных на сторонние серверы.

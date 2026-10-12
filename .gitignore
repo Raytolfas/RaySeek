@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+
+models/*.gguf
+models/*.pt
+models/.cache/
+
+rayseek_faiss.index
+rayseek_faiss_meta.json
+rayseek_chroma/
+
+*.log
+.env

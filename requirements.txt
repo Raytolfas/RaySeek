@@ -1,0 +1,12 @@
+llama-cpp-python
+huggingface-hub
+torch
+transformers
+faiss-cpu
+deep-translator
+ddgs
+sympy
+psutil
+fastapi
+uvicorn
+pydantic
