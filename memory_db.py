@@ -78,7 +78,7 @@ def add_texts(texts, metadatas=None):
         _documents.append({"text": t, "meta": meta})
     save_index()
 
-def query_texts(query, n_results=2):
+def query_texts(query, n_results=3):
     global _index, _documents
     _init_storage()
     if _index.ntotal == 0:
@@ -96,27 +96,77 @@ def get_doc_count():
     _init_storage()
     return _index.ntotal if _index is not None else 0
 
+def extract_file_content(filepath):
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(filepath)
+            return "\n".join([page.extract_text() or "" for page in reader.pages])
+        except Exception:
+            return ""
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+def chunk_text(text, chunk_size=350):
+    lines = [p.strip() for p in text.split("\n") if p.strip()]
+    chunks = []
+    curr = ""
+    for line in lines:
+        if len(curr) + len(line) < chunk_size:
+            curr += ("\n" if curr else "") + line
+        else:
+            if curr:
+                chunks.append(curr)
+            curr = line
+    if curr:
+        chunks.append(curr)
+    return chunks
+
+def index_path(target_path):
+    _init_storage()
+    if not os.path.exists(target_path):
+        return 0
+
+    known_texts = {d["text"] for d in _documents}
+    supported = {".txt", ".md", ".py", ".js", ".ts", ".html", ".css", ".json", ".csv", ".pdf", ".cpp", ".c", ".h", ".rs", ".go"}
+    files_to_scan = []
+
+    if os.path.isfile(target_path):
+        files_to_scan.append(target_path)
+    else:
+        for root, _, files in os.walk(target_path):
+            if any(ign in root for ign in [".git", ".venv", "node_modules", "__pycache__", "dist", "build"]):
+                continue
+            for f in files:
+                if os.path.splitext(f)[1].lower() in supported:
+                    files_to_scan.append(os.path.join(root, f))
+
+    new_texts = []
+    new_metas = []
+
+    for fpath in files_to_scan:
+        content = extract_file_content(fpath)
+        if not content:
+            continue
+        rel = os.path.relpath(fpath, os.getcwd())
+        chunks = chunk_text(content)
+        for chunk in chunks:
+            if len(chunk) > 20 and chunk not in known_texts:
+                doc_text = f"[{rel}]:\n{chunk}"
+                new_texts.append(doc_text)
+                new_metas.append({"source": rel})
+                known_texts.add(chunk)
+
+    if new_texts:
+        add_texts(new_texts, new_metas)
+    return len(new_texts)
+
 def index_local_files():
     if not os.path.exists("brand_data"):
         os.makedirs("brand_data")
         return
-    _init_storage()
-    known_texts = {d["text"] for d in _documents}
-    new_texts = []
-    new_metas = []
-    for filename in os.listdir("brand_data"):
-        if filename.endswith(".txt"):
-            filepath = os.path.join("brand_data", filename)
-            try:
-                with open(filepath, "r", encoding="utf-8") as f:
-                    content = f.read()
-                paragraphs = [p.strip() for p in content.split("\n") if len(p.strip()) > 10]
-                for p in paragraphs:
-                    if p not in known_texts:
-                        new_texts.append(p)
-                        new_metas.append({"source": filename})
-                        known_texts.add(p)
-            except Exception:
-                pass
-    if new_texts:
-        add_texts(new_texts, new_metas)
+    index_path("brand_data")

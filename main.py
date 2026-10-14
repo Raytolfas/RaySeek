@@ -17,13 +17,29 @@ import re
 import random
 import sympy
 from model_loader import load_engine
-from memory_db import query_texts, get_doc_count, index_local_files
+from memory_db import query_texts, get_doc_count, index_local_files, index_path
 from search import web_search
 from deep_translator import GoogleTranslator
+import tools
 
-SYSTEM_PROMPT = """Ты — RaySeek 1.0, интеллектуальный ассистент от Raytolfas.
-Ты точный, универсальный и лаконичный помощник в программировании, анализе, решении задач и диалоге.
-Всегда отвечай строго по существу. Код оформляй в блоки ```язык ... ```."""
+SYSTEM_PROMPT = """Ты — RaySeek 1.1, интеллектуальный ассистент нового поколения от экосистемы Raytolfas.
+Ты точный, глубоко мыслящий инженерный помощник в программировании, анализе и решении задач.
+
+Твои возможности и правила:
+1. Рассуждение (Thinking): Перед решением сложных задач, кода или рассуждений ты формируешь блок <think>
+...твои рассуждения, план действий и анализ...
+</think>
+После чего выдаешь чистый, идеальный итоговый ответ.
+
+2. Автономные инструменты (Tools): При необходимости ты можешь запросить выполнение системного инструмента:
+- Выполнить команду: <tool>bash: команда</tool>
+- Прочитать файл: <tool>read_file: путь_к_файлу</tool>
+- Записать файл: <tool>write_file: путь|содержимое</tool>
+- Список файлов: <tool>list_dir: папка</tool>
+- Системное время: <tool>time</tool>
+- Поиск в сети: <tool>web: запрос</tool>
+
+3. Код: Весь программный код всегда оформляй в блоки ```язык ... ```."""
 
 def format_math_response(text):
     clean_text = text.replace("^", "**")
@@ -65,11 +81,53 @@ def translate_text(text):
 
 def print_help():
     print("Commands:")
+    print("  /load <path>       Index local files or folder (code, txt, pdf) into memory")
+    print("  /think             Toggle deep reasoning display")
+    print("  /bash <cmd>        Execute system shell command")
     print("  /web <query>       Search the web in real-time")
     print("  /translate <text>  Translate RU <-> EN")
-    print("  /info              System info")
+    print("  /info              System status and context info")
     print("  /help              Show this help")
     print("  /exit              Exit session")
+
+def execute_model_stream(llm, messages, show_think=True):
+    stream = llm.create_chat_completion(
+        messages=messages,
+        max_tokens=1500,
+        temperature=0.6,
+        top_p=0.9,
+        repeat_penalty=1.15,
+        stream=True
+    )
+
+    full_reply = ""
+    in_think = False
+
+    for chunk in stream:
+        delta = chunk["choices"][0].get("delta", {})
+        content = delta.get("content", "")
+        if not content:
+            continue
+
+        full_reply += content
+
+        if "<think>" in full_reply and not in_think:
+            in_think = True
+            if show_think:
+                print("\n[Thinking...]\n", end="", flush=True)
+
+        if in_think:
+            if "</think>" in full_reply:
+                in_think = False
+                if show_think:
+                    print("\n[Thinking complete]\n", end="", flush=True)
+            elif show_think:
+                print(content, end="", flush=True)
+        else:
+            print(content, end="", flush=True)
+
+    print()
+    return full_reply
 
 def main():
     try:
@@ -80,10 +138,11 @@ def main():
         sys.exit(1)
 
     ctx_size = getattr(llm, "n_ctx", lambda: 8192)() if callable(getattr(llm, "n_ctx", None)) else 8192
-    print(f"RaySeek 1.0 (Context: {ctx_size} tokens)")
+    print(f"RaySeek 1.1 (Context: {ctx_size} tokens | RAG & Reasoning Active)")
     print("Type /help for commands, /exit to quit.\n")
 
     history = []
+    show_think = True
 
     while True:
         try:
@@ -100,12 +159,33 @@ def main():
                 print_help()
                 continue
 
+            if low == "/think":
+                show_think = not show_think
+                status = "shown" if show_think else "hidden"
+                print(f"[Deep reasoning stream: {status}]")
+                continue
+
             if low == "/info":
                 docs = get_doc_count()
+                t_status = "active" if show_think else "hidden"
                 print("Model: Qwen2.5-3B-Instruct (GGUF Q4_K_M)")
-                print("Engine: llama.cpp")
+                print("Engine: llama.cpp AVX2")
                 print(f"Context window: {ctx_size} tokens")
-                print(f"Memory: Meta FAISS ({docs} items)")
+                print(f"Memory: Meta FAISS ({docs} indexed chunks)")
+                print(f"Reasoning stream: {t_status}")
+                print("Tools: bash, web, read/write_file, list_dir, time")
+                continue
+
+            if low.startswith("/load "):
+                target_path = line[6:].strip()
+                count = index_path(target_path)
+                print(f"[Loaded {count} new chunks from '{target_path}' into FAISS memory. Total: {get_doc_count()}]")
+                continue
+
+            if low.startswith("/bash "):
+                cmd_to_run = line[6:].strip()
+                res = tools.run_bash(cmd_to_run)
+                print(res)
                 continue
 
             if low.startswith("/translate "):
@@ -129,34 +209,35 @@ def main():
                 history.append({"role": "assistant", "content": math_response})
                 continue
 
-            memory_facts = query_texts(line, n_results=2)
+            memory_facts = query_texts(line, n_results=3)
             context_snippet = ""
             if memory_facts:
-                context_snippet = "\n\nFacts:\n" + "\n".join(memory_facts)
+                context_snippet = "\n\nIndexed knowledge:\n" + "\n".join(memory_facts)
 
             messages = [{"role": "system", "content": SYSTEM_PROMPT + context_snippet}]
             for turn in history[-16:]:
                 messages.append(turn)
             messages.append({"role": "user", "content": line})
 
-            stream = llm.create_chat_completion(
-                messages=messages,
-                max_tokens=1024,
-                temperature=0.65,
-                top_p=0.9,
-                repeat_penalty=1.18,
-                stream=True
-            )
+            full_reply = execute_model_stream(llm, messages, show_think=show_think)
 
-            full_reply = ""
-            for chunk in stream:
-                delta = chunk["choices"][0].get("delta", {})
-                content = delta.get("content", "")
-                if content:
-                    print(content, end="", flush=True)
-                    full_reply += content
+            tool_match = re.search(r"<tool>([a-zA-Z_]+)(?::\s*([^<]+))?</tool>", full_reply)
+            if tool_match:
+                tool_name = tool_match.group(1)
+                tool_arg = tool_match.group(2) if tool_match.group(2) else ""
+                print(f"\n[Executing Tool: {tool_name} ...] ", end="", flush=True)
+                tool_result = tools.execute_tool_call(tool_name, tool_arg)
+                print("Done.\n")
 
-            print()
+                tool_messages = list(messages)
+                tool_messages.append({"role": "assistant", "content": full_reply})
+                tool_messages.append({
+                    "role": "user",
+                    "content": f"[Tool Result for {tool_name}]:\n{tool_result}\n\nСформулируй итоговый ответ с учетом этих данных."
+                })
+
+                followup_reply = execute_model_stream(llm, tool_messages, show_think=show_think)
+                full_reply = f"{full_reply}\n\n[Tool Output]:\n{tool_result}\n\n{followup_reply}"
 
             history.append({"role": "user", "content": line})
             history.append({"role": "assistant", "content": full_reply})
